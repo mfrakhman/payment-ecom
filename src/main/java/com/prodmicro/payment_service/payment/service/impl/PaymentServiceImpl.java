@@ -5,6 +5,7 @@ import com.prodmicro.payment_service.payment.dto.PaymentResponse;
 import com.prodmicro.payment_service.payment.entity.Payment;
 import com.prodmicro.payment_service.payment.entity.PaymentStatus;
 import com.prodmicro.payment_service.payment.repository.PaymentRepository;
+import com.prodmicro.payment_service.payment.service.MidtransService;
 import com.prodmicro.payment_service.payment.service.PaymentService;
 import com.prodmicro.payment_service.rabbitmq.RabbitMQPublisher;
 import org.slf4j.Logger;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
@@ -27,10 +29,14 @@ public class PaymentServiceImpl implements PaymentService {
 
     private final PaymentRepository paymentRepository;
     private final RabbitMQPublisher publisher;
+    private final MidtransService midtransService;
 
-    public PaymentServiceImpl(PaymentRepository paymentRepository, RabbitMQPublisher publisher) {
+    public PaymentServiceImpl(PaymentRepository paymentRepository,
+                              RabbitMQPublisher publisher,
+                              MidtransService midtransService) {
         this.paymentRepository = paymentRepository;
         this.publisher = publisher;
+        this.midtransService = midtransService;
     }
 
     @Override
@@ -46,19 +52,23 @@ public class PaymentServiceImpl implements PaymentService {
         payment.setAmount(event.amount());
         payment.setStatus(PaymentStatus.AWAITING);
 
-        // TODO: call QRIS API here to generate QR
-        // For now stub: set placeholder values so flow continues
+        try {
+            Map<String, Object> result = midtransService.chargeQris(event.orderId(), event.amount());
+            payment.setTransactionId((String) result.get("transaction_id"));
+            payment.setQrString((String) result.get("qr_string"));
+            log.info("[initializePayment] Midtrans charge success transactionId={}", payment.getTransactionId());
+        } catch (RestClientException e) {
+            log.error("[initializePayment] Midtrans charge failed orderId={}: {}", event.orderId(), e.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Payment gateway error");
+        }
+
         Instant expiresAt = Instant.now().plus(15, ChronoUnit.MINUTES);
         payment.setExpiresAt(expiresAt);
-        // payment.setTransactionId(qrisResponse.transactionId());
-        // payment.setQrString(qrisResponse.qrString());
-
         paymentRepository.save(payment);
-        log.info("[initializePayment] payment created for orderId={}", event.orderId());
+        log.info("[initializePayment] payment created orderId={}", event.orderId());
 
-        // Publish qr_ready so order-service stores the QR
         Map<String, Object> qrReadyPayload = new HashMap<>();
-        qrReadyPayload.put("orderId", event.orderId());
+        qrReadyPayload.put("orderId", payment.getOrderId());
         qrReadyPayload.put("transactionId", payment.getTransactionId());
         qrReadyPayload.put("qrString", payment.getQrString());
         qrReadyPayload.put("expiresAt", expiresAt.toString());
@@ -75,59 +85,63 @@ public class PaymentServiceImpl implements PaymentService {
 
     @Override
     public void handleWebhook(Map<String, Object> payload) {
-        String transactionId = (String) payload.get("transaction_id");
-        String status = (String) payload.get("status");
+        String orderId = (String) payload.get("order_id");
+        String statusCode = (String) payload.get("status_code");
+        String grossAmount = (String) payload.get("gross_amount");
+        String signatureKey = (String) payload.get("signature_key");
+        String transactionStatus = (String) payload.get("transaction_status");
 
-        if (transactionId == null || status == null) {
-            log.warn("[webhook] missing transaction_id or status");
+        if (orderId == null || statusCode == null || grossAmount == null || signatureKey == null) {
+            log.warn("[webhook] missing required fields, keys={}", payload.keySet());
             return;
         }
 
-        Payment payment = paymentRepository.findByTransactionId(transactionId)
-                .orElse(null);
+        if (!midtransService.verifySignature(orderId, statusCode, grossAmount, signatureKey)) {
+            log.warn("[webhook] invalid signature for orderId={}", orderId);
+            return;
+        }
 
+        Payment payment = paymentRepository.findByOrderId(orderId).orElse(null);
         if (payment == null) {
-            log.warn("[webhook] no payment found for transactionId={}", transactionId);
+            log.warn("[webhook] no payment found for orderId={}", orderId);
             return;
         }
 
         if (payment.getStatus() != PaymentStatus.AWAITING) {
-            log.warn("[webhook] payment already processed orderId={} status={}", payment.getOrderId(), payment.getStatus());
+            log.warn("[webhook] already processed orderId={} status={}", orderId, payment.getStatus());
             return;
         }
 
-        if ("settlement".equals(status) || "capture".equals(status)) {
+        if ("settlement".equals(transactionStatus) || "capture".equals(transactionStatus)) {
             payment.setStatus(PaymentStatus.PAID);
             payment.setPaidAt(Instant.now());
             paymentRepository.save(payment);
+            publisher.publish("payment.confirmed", buildPayload(payment));
+            log.info("[webhook] payment confirmed orderId={}", orderId);
 
-            Map<String, Object> confirmedPayload = buildPayload(payment, payload);
-            publisher.publish("payment.confirmed", confirmedPayload);
-            log.info("[webhook] payment confirmed orderId={}", payment.getOrderId());
-
-        } else if ("expire".equals(status)) {
+        } else if ("expire".equals(transactionStatus)) {
             payment.setStatus(PaymentStatus.EXPIRED);
             paymentRepository.save(payment);
+            publisher.publish("payment.expired", buildPayload(payment));
+            log.info("[webhook] payment expired orderId={}", orderId);
 
-            publisher.publish("payment.expired", buildPayload(payment, payload));
-            log.info("[webhook] payment expired orderId={}", payment.getOrderId());
-
-        } else if ("deny".equals(status) || "cancel".equals(status)) {
+        } else if ("deny".equals(transactionStatus) || "cancel".equals(transactionStatus)) {
             payment.setStatus(PaymentStatus.FAILED);
             paymentRepository.save(payment);
+            publisher.publish("payment.failed", buildPayload(payment));
+            log.info("[webhook] payment failed orderId={}", orderId);
 
-            publisher.publish("payment.failed", buildPayload(payment, payload));
-            log.info("[webhook] payment failed orderId={}", payment.getOrderId());
+        } else {
+            log.info("[webhook] unhandled status={} orderId={}", transactionStatus, orderId);
         }
     }
 
-    private Map<String, Object> buildPayload(Payment payment, Map<String, Object> webhookData) {
+    private Map<String, Object> buildPayload(Payment payment) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("orderId", payment.getOrderId());
         payload.put("transactionId", payment.getTransactionId());
         payload.put("amount", payment.getAmount());
         payload.put("paidAt", payment.getPaidAt() != null ? payment.getPaidAt().toString() : null);
-        // items carried from webhook or left for order-service to resolve from its own DB
         return payload;
     }
 

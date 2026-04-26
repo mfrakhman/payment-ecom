@@ -28,5 +28,9 @@ rabbitmq:
   queue:
     payment: ${RABBITMQ_QUEUE_PAYMENT:payment-service}
 
+midtrans:
+  server-key: ${MIDTRANS_SERVER_KEY}
+  is-production: ${MIDTRANS_IS_PRODUCTION:false}
+
 server:
   port: ${PORT:3003}
