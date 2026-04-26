@@ -71,6 +71,7 @@ public class PaymentServiceImpl implements PaymentService {
         qrReadyPayload.put("orderId", payment.getOrderId());
         qrReadyPayload.put("transactionId", payment.getTransactionId());
         qrReadyPayload.put("qrString", payment.getQrString());
+        qrReadyPayload.put("qrImageUrl", midtransService.getQrImageUrl(payment.getTransactionId()));
         qrReadyPayload.put("expiresAt", expiresAt.toString());
         publisher.publish("payment.qr_ready", qrReadyPayload);
     }

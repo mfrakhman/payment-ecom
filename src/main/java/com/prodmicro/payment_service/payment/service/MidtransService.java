@@ -22,18 +22,19 @@ public class MidtransService {
     private static final Logger log = LoggerFactory.getLogger(MidtransService.class);
 
     private final String serverKey;
+    private final String baseUrl;
     private final RestClient restClient;
 
     public MidtransService(
             @Value("${midtrans.server-key}") String serverKey,
             @Value("${midtrans.is-production:false}") boolean isProduction) {
         this.serverKey = serverKey;
-        String baseUrl = isProduction
+        this.baseUrl = isProduction
                 ? "https://api.midtrans.com"
                 : "https://api.sandbox.midtrans.com";
         String credentials = Base64.getEncoder().encodeToString((serverKey + ":").getBytes(StandardCharsets.UTF_8));
         this.restClient = RestClient.builder()
-                .baseUrl(baseUrl)
+                .baseUrl(this.baseUrl)
                 .defaultHeader("Authorization", "Basic " + credentials)
                 .defaultHeader("Accept", "application/json")
                 .build();
@@ -60,6 +61,10 @@ public class MidtransService {
                 .body(body)
                 .retrieve()
                 .body(Map.class);
+    }
+
+    public String getQrImageUrl(String transactionId) {
+        return baseUrl + "/v2/qris/" + transactionId + "/qr-code";
     }
 
     public boolean verifySignature(String orderId, String statusCode, String grossAmount, String signatureKey) {
