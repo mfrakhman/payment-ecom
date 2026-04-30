@@ -55,12 +55,17 @@ public class MidtransService {
         body.put("qris", qris);
 
         log.info("[midtrans] charging QRIS for orderId={} amount={}", orderId, amount);
-        return restClient.post()
+        Map<String, Object> response = restClient.post()
                 .uri("/v2/charge")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body)
                 .retrieve()
                 .body(Map.class);
+        log.info("[midtrans] charge response status_code={} status_message={} transaction_id={}",
+                response != null ? response.get("status_code") : "null",
+                response != null ? response.get("status_message") : "null",
+                response != null ? response.get("transaction_id") : "null");
+        return response;
     }
 
     public String getQrImageUrl(String transactionId) {
