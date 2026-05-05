@@ -52,6 +52,7 @@ public class PaymentServiceImpl implements PaymentService {
         payment.setAmount(event.amount());
         payment.setStatus(PaymentStatus.AWAITING);
 
+        boolean chargeSuccess = false;
         try {
             Map<String, Object> result = midtransService.chargeQris(event.orderId(), event.amount());
             String statusCode = (String) result.get("status_code");
@@ -59,14 +60,22 @@ public class PaymentServiceImpl implements PaymentService {
                 String statusMessage = (String) result.get("status_message");
                 log.error("[initializePayment] Midtrans charge failed orderId={} status_code={} message={}",
                         event.orderId(), statusCode, statusMessage);
-                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Payment gateway error: " + statusMessage);
+            } else {
+                payment.setTransactionId((String) result.get("transaction_id"));
+                payment.setQrString((String) result.get("qr_string"));
+                chargeSuccess = true;
+                log.info("[initializePayment] Midtrans charge success transactionId={}", payment.getTransactionId());
             }
-            payment.setTransactionId((String) result.get("transaction_id"));
-            payment.setQrString((String) result.get("qr_string"));
-            log.info("[initializePayment] Midtrans charge success transactionId={}", payment.getTransactionId());
         } catch (RestClientException e) {
             log.error("[initializePayment] Midtrans charge failed orderId={}: {}", event.orderId(), e.getMessage());
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Payment gateway error");
+        }
+
+        if (!chargeSuccess) {
+            payment.setStatus(PaymentStatus.FAILED);
+            paymentRepository.save(payment);
+            publisher.publish("payment.failed", buildPayload(payment));
+            log.info("[initializePayment] payment failed orderId={}", event.orderId());
+            return;
         }
 
         Instant expiresAt = Instant.now().plus(15, ChronoUnit.MINUTES);
