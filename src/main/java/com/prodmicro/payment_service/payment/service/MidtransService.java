@@ -14,6 +14,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 
 @Component
@@ -41,20 +42,16 @@ public class MidtransService {
     }
 
     @SuppressWarnings("unchecked")
-    public Map<String, Object> chargeQris(String orderId, BigDecimal amount) {
+    public Map<String, Object> chargeGopay(String orderId, BigDecimal amount) {
         Map<String, Object> transactionDetails = new HashMap<>();
         transactionDetails.put("order_id", orderId);
         transactionDetails.put("gross_amount", amount.longValue());
 
-        Map<String, Object> qris = new HashMap<>();
-        qris.put("acquirer", "gopay");
-
         Map<String, Object> body = new HashMap<>();
-        body.put("payment_type", "qris");
+        body.put("payment_type", "gopay");
         body.put("transaction_details", transactionDetails);
-        body.put("qris", qris);
 
-        log.info("[midtrans] charging QRIS for orderId={} amount={}", orderId, amount);
+        log.info("[midtrans] charging GoPay for orderId={} amount={}", orderId, amount);
         Map<String, Object> response = restClient.post()
                 .uri("/v2/charge")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -68,8 +65,15 @@ public class MidtransService {
         return response;
     }
 
-    public String getQrImageUrl(String transactionId) {
-        return baseUrl + "/v2/qris/" + transactionId + "/qr-code";
+    @SuppressWarnings("unchecked")
+    public String extractQrCodeUrl(Map<String, Object> chargeResponse) {
+        List<Map<String, Object>> actions = (List<Map<String, Object>>) chargeResponse.get("actions");
+        if (actions == null) return null;
+        return actions.stream()
+                .filter(a -> "generate-qr-code".equals(a.get("name")))
+                .map(a -> (String) a.get("url"))
+                .findFirst()
+                .orElse(null);
     }
 
     public boolean verifySignature(String orderId, String statusCode, String grossAmount, String signatureKey) {

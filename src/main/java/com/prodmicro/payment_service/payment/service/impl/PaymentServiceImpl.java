@@ -53,8 +53,9 @@ public class PaymentServiceImpl implements PaymentService {
         payment.setStatus(PaymentStatus.AWAITING);
 
         boolean chargeSuccess = false;
+        String qrCodeUrl = null;
         try {
-            Map<String, Object> result = midtransService.chargeQris(event.orderId(), event.amount());
+            Map<String, Object> result = midtransService.chargeGopay(event.orderId(), event.amount());
             String statusCode = (String) result.get("status_code");
             if (!"201".equals(statusCode)) {
                 String statusMessage = (String) result.get("status_message");
@@ -62,7 +63,8 @@ public class PaymentServiceImpl implements PaymentService {
                         event.orderId(), statusCode, statusMessage);
             } else {
                 payment.setTransactionId((String) result.get("transaction_id"));
-                payment.setQrString((String) result.get("qr_string"));
+                qrCodeUrl = midtransService.extractQrCodeUrl(result);
+                payment.setQrString(qrCodeUrl);
                 chargeSuccess = true;
                 log.info("[initializePayment] Midtrans charge success transactionId={}", payment.getTransactionId());
             }
@@ -87,7 +89,7 @@ public class PaymentServiceImpl implements PaymentService {
         qrReadyPayload.put("orderId", payment.getOrderId());
         qrReadyPayload.put("transactionId", payment.getTransactionId());
         qrReadyPayload.put("qrString", payment.getQrString());
-        qrReadyPayload.put("qrImageUrl", midtransService.getQrImageUrl(payment.getTransactionId()));
+        qrReadyPayload.put("qrImageUrl", qrCodeUrl);
         qrReadyPayload.put("expiresAt", expiresAt.toString());
         publisher.publish("payment.qr_ready", qrReadyPayload);
     }
