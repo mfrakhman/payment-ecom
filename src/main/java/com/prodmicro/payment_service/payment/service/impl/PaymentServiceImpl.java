@@ -63,8 +63,8 @@ public class PaymentServiceImpl implements PaymentService {
                         event.orderId(), statusCode, statusMessage);
             } else {
                 payment.setTransactionId((String) result.get("transaction_id"));
+                payment.setQrString((String) result.get("qr_string"));
                 qrCodeUrl = midtransService.extractQrCodeUrl(result);
-                payment.setQrString(qrCodeUrl);
                 chargeSuccess = true;
                 log.info("[initializePayment] Midtrans charge success transactionId={}", payment.getTransactionId());
             }

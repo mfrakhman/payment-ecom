@@ -47,11 +47,15 @@ public class MidtransService {
         transactionDetails.put("order_id", orderId);
         transactionDetails.put("gross_amount", amount.longValue());
 
-        Map<String, Object> body = new HashMap<>();
-        body.put("payment_type", "gopay");
-        body.put("transaction_details", transactionDetails);
+        Map<String, Object> qris = new HashMap<>();
+        qris.put("acquirer", "gopay");
 
-        log.info("[midtrans] charging GoPay for orderId={} amount={}", orderId, amount);
+        Map<String, Object> body = new HashMap<>();
+        body.put("payment_type", "qris");
+        body.put("transaction_details", transactionDetails);
+        body.put("qris", qris);
+
+        log.info("[midtrans] charging QRIS for orderId={} amount={}", orderId, amount);
         Map<String, Object> response = restClient.post()
                 .uri("/v2/charge")
                 .contentType(MediaType.APPLICATION_JSON)
