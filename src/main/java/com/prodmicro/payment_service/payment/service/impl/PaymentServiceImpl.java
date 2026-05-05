@@ -54,6 +54,13 @@ public class PaymentServiceImpl implements PaymentService {
 
         try {
             Map<String, Object> result = midtransService.chargeQris(event.orderId(), event.amount());
+            String statusCode = (String) result.get("status_code");
+            if (!"201".equals(statusCode)) {
+                String statusMessage = (String) result.get("status_message");
+                log.error("[initializePayment] Midtrans charge failed orderId={} status_code={} message={}",
+                        event.orderId(), statusCode, statusMessage);
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Payment gateway error: " + statusMessage);
+            }
             payment.setTransactionId((String) result.get("transaction_id"));
             payment.setQrString((String) result.get("qr_string"));
             log.info("[initializePayment] Midtrans charge success transactionId={}", payment.getTransactionId());
