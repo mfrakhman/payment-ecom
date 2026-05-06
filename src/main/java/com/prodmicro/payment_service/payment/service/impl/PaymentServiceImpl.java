@@ -55,7 +55,7 @@ public class PaymentServiceImpl implements PaymentService {
         boolean chargeSuccess = false;
         String qrCodeUrl = null;
         try {
-            Map<String, Object> result = midtransService.chargeGopay(event.orderId(), event.amount());
+            Map<String, Object> result = midtransService.chargeQris(event.orderId(), event.amount());
             String statusCode = (String) result.get("status_code");
             if (!"201".equals(statusCode)) {
                 String statusMessage = (String) result.get("status_message");
@@ -65,8 +65,16 @@ public class PaymentServiceImpl implements PaymentService {
                 payment.setTransactionId((String) result.get("transaction_id"));
                 payment.setQrString((String) result.get("qr_string"));
                 qrCodeUrl = midtransService.extractQrCodeUrl(result);
+                Instant expireTime = midtransService.extractExpireTime(result);
+                payment.setExpiresAt(expireTime != null
+                        ? expireTime
+                        : Instant.now().plus(15, ChronoUnit.MINUTES));
+                if (qrCodeUrl == null) {
+                    log.warn("[initializePayment] QR code URL missing from Midtrans response for orderId={}", event.orderId());
+                }
                 chargeSuccess = true;
-                log.info("[initializePayment] Midtrans charge success transactionId={}", payment.getTransactionId());
+                log.info("[initializePayment] Midtrans charge success transactionId={} expiresAt={} qrCodeUrl={}",
+                        payment.getTransactionId(), payment.getExpiresAt(), qrCodeUrl);
             }
         } catch (RestClientException e) {
             log.error("[initializePayment] Midtrans charge failed orderId={}: {}", event.orderId(), e.getMessage());
@@ -80,8 +88,6 @@ public class PaymentServiceImpl implements PaymentService {
             return;
         }
 
-        Instant expiresAt = Instant.now().plus(15, ChronoUnit.MINUTES);
-        payment.setExpiresAt(expiresAt);
         paymentRepository.save(payment);
         log.info("[initializePayment] payment created orderId={}", event.orderId());
 
@@ -90,7 +96,7 @@ public class PaymentServiceImpl implements PaymentService {
         qrReadyPayload.put("transactionId", payment.getTransactionId());
         qrReadyPayload.put("qrString", payment.getQrString());
         qrReadyPayload.put("qrImageUrl", qrCodeUrl);
-        qrReadyPayload.put("expiresAt", expiresAt.toString());
+        qrReadyPayload.put("expiresAt", payment.getExpiresAt().toString());
         publisher.publish("payment.qr_ready", qrReadyPayload);
     }
 
@@ -130,6 +136,9 @@ public class PaymentServiceImpl implements PaymentService {
             log.warn("[webhook] already processed orderId={} status={}", orderId, payment.getStatus());
             return;
         }
+
+        String paymentType = (String) payload.get("payment_type");
+        log.info("[webhook] processing orderId={} transactionStatus={} paymentType={}", orderId, transactionStatus, paymentType);
 
         if ("settlement".equals(transactionStatus) || "capture".equals(transactionStatus)) {
             payment.setStatus(PaymentStatus.PAID);

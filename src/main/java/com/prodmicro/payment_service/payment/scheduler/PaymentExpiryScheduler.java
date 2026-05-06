@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -28,23 +29,31 @@ public class PaymentExpiryScheduler {
     }
 
     @Scheduled(fixedRate = 60_000)
+    @Transactional
     public void expireStalePayments() {
         List<Payment> stale = paymentRepository.findByStatusAndExpiresAtBefore(
                 PaymentStatus.AWAITING, Instant.now());
         if (stale.isEmpty()) return;
 
         log.info("[scheduler] expiring {} stale payment(s)", stale.size());
+
         for (Payment payment : stale) {
             payment.setStatus(PaymentStatus.EXPIRED);
-            paymentRepository.save(payment);
-
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("orderId", payment.getOrderId());
-            payload.put("transactionId", payment.getTransactionId());
-            payload.put("amount", payment.getAmount());
-            publisher.publish("payment.expired", payload);
-
-            log.info("[scheduler] expired payment orderId={}", payment.getOrderId());
+            log.info("[scheduler] expired orderId={} transactionId={}", payment.getOrderId(), payment.getTransactionId());
         }
+        paymentRepository.saveAll(stale);
+
+        for (Payment payment : stale) {
+            publisher.publish("payment.expired", buildPayload(payment));
+        }
+    }
+
+    private Map<String, Object> buildPayload(Payment payment) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("transactionId", payment.getTransactionId());
+        payload.put("amount", payment.getAmount());
+        payload.put("paidAt", null);
+        return payload;
     }
 }

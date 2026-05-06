@@ -11,6 +11,10 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.HexFormat;
@@ -42,7 +46,7 @@ public class MidtransService {
     }
 
     @SuppressWarnings("unchecked")
-    public Map<String, Object> chargeGopay(String orderId, BigDecimal amount) {
+    public Map<String, Object> chargeQris(String orderId, BigDecimal amount) {
         Map<String, Object> transactionDetails = new HashMap<>();
         transactionDetails.put("order_id", orderId);
         transactionDetails.put("gross_amount", amount.longValue());
@@ -50,10 +54,15 @@ public class MidtransService {
         Map<String, Object> qris = new HashMap<>();
         qris.put("acquirer", "gopay");
 
+        Map<String, Object> customExpiry = new HashMap<>();
+        customExpiry.put("expiry_duration", "15");
+        customExpiry.put("unit", "minute");
+
         Map<String, Object> body = new HashMap<>();
         body.put("payment_type", "qris");
         body.put("transaction_details", transactionDetails);
         body.put("qris", qris);
+        body.put("custom_expiry", customExpiry);
 
         log.info("[midtrans] charging QRIS for orderId={} amount={}", orderId, amount);
         Map<String, Object> response = restClient.post()
@@ -78,6 +87,20 @@ public class MidtransService {
                 .map(a -> (String) a.get("url"))
                 .findFirst()
                 .orElse(null);
+    }
+
+    public Instant extractExpireTime(Map<String, Object> chargeResponse) {
+        String expireTime = (String) chargeResponse.get("expire_time");
+        if (expireTime == null) return null;
+        try {
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            return LocalDateTime.parse(expireTime, formatter)
+                    .atZone(ZoneId.of("Asia/Jakarta"))
+                    .toInstant();
+        } catch (Exception e) {
+            log.warn("[midtrans] failed to parse expire_time={}: {}", expireTime, e.getMessage());
+            return null;
+        }
     }
 
     public boolean verifySignature(String orderId, String statusCode, String grossAmount, String signatureKey) {
